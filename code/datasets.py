@@ -309,6 +309,7 @@ class TextDataset(data.Dataset):
         wrong_imgs = get_imgs(wrong_img_name, self.imsize,
                               wrong_bbox, self.transform, normalize=self.norm)
 
+        print("Size of the embedding for an image: ", embeddings.shape)
         embedding_ix = random.randint(0, embeddings.shape[0] - 1)
         embedding = embeddings[embedding_ix, :]
         if self.target_transform is not None:

@@ -30,7 +30,7 @@ GAN:
     GF_DIM: 64
     Z_DIM: 100
     R_NUM: 2
-    B_CONDITION: True
+    B_CONDITION: True # Whether to have conditional augmentation, or not.
 
 TEXT:
     DIMENSION: 1024
