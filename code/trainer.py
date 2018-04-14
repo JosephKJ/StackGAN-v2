@@ -19,7 +19,7 @@ from miscc.utils import mkdir_p
 from tensorboard import summary
 from tensorboard import FileWriter
 
-from model import G_NET, D_NET64, D_NET128, D_NET256, D_NET512, D_NET1024, INCEPTION_V3
+from model import G_NET, G_NET_MULTI_CAPTION, D_NET64, D_NET128, D_NET256, D_NET512, D_NET1024, INCEPTION_V3
 
 
 
@@ -104,10 +104,16 @@ def negative_log_posterior_probability(predictions, num_splits=1):
 
 
 def load_network(gpus):
-    netG = G_NET()
-    netG.apply(weights_init)
-    netG = torch.nn.DataParallel(netG, device_ids=gpus)
-    print(netG)
+    if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+        netG = G_NET_MULTI_CAPTION()
+        netG.apply(weights_init)
+        netG = torch.nn.DataParallel(netG, device_ids=gpus)
+        print(netG)
+    else:
+        netG = G_NET()
+        netG.apply(weights_init)
+        netG = torch.nn.DataParallel(netG, device_ids=gpus)
+        print(netG)
 
     netsD = []
     if cfg.TREE.BRANCH_NUM > 0:
@@ -564,7 +570,7 @@ class condGANTrainer(object):
     def train_Dnet(self, idx, count):
         flag = count % 100
         batch_size = self.real_imgs[0].size(0)
-        criterion, mu = self.criterion, self.mu
+        criterion = self.criterion
 
         netD, optD = self.netsD[idx], self.optimizersD[idx]
         real_imgs = self.real_imgs[idx]
@@ -575,10 +581,18 @@ class condGANTrainer(object):
         # Forward
         real_labels = self.real_labels[:batch_size]
         fake_labels = self.fake_labels[:batch_size]
+
         # for real
-        real_logits = netD(real_imgs, mu.detach())
-        wrong_logits = netD(wrong_imgs, mu.detach())
-        fake_logits = netD(fake_imgs.detach(), mu.detach())
+        if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+            mus = self.mus
+            real_logits = netD(real_imgs, mus[idx].detach())
+            wrong_logits = netD(wrong_imgs, mus[idx].detach())
+            fake_logits = netD(fake_imgs.detach(), mus[idx].detach())
+        else:
+            mu = self.mu
+            real_logits = netD(real_imgs, mu.detach())
+            wrong_logits = netD(wrong_imgs, mu.detach())
+            fake_logits = netD(fake_imgs.detach(), mu.detach())
         #
         errD_real = criterion(real_logits[0], real_labels)
         errD_wrong = criterion(wrong_logits[0], fake_labels)
@@ -613,10 +627,19 @@ class condGANTrainer(object):
         errG_total = 0
         flag = count % 100
         batch_size = self.real_imgs[0].size(0)
-        criterion, mu, logvar = self.criterion, self.mu, self.logvar
+        criterion = self.criterion
+
+        if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+            mus, logvars = self.mus, self.logvars
+        else:
+            mu, logvar = self.mu, self.logvar
+
         real_labels = self.real_labels[:batch_size]
         for i in range(self.num_Ds):
-            outputs = self.netsD[i](self.fake_imgs[i], mu)
+            if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+                outputs = self.netsD[i](self.fake_imgs[i], mus[i])
+            else:
+                outputs = self.netsD[i](self.fake_imgs[i], mu)
             errG = criterion(outputs[0], real_labels)
             if len(outputs) > 1 and cfg.TRAIN.COEFF.UNCOND_LOSS > 0:
                 errG_patch = cfg.TRAIN.COEFF.UNCOND_LOSS *\
@@ -656,7 +679,12 @@ class condGANTrainer(object):
                     sum_cov = summary.scalar('G_like_cov1', like_cov1.data[0])
                     self.summary_writer.add_summary(sum_cov, count)
 
-        kl_loss = KL_loss(mu, logvar) * cfg.TRAIN.COEFF.KL
+        if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+            kl_loss = 0
+            for i in range(self.num_Ds):
+                kl_loss += KL_loss(mus[i], logvars[i]) * cfg.TRAIN.COEFF.KL
+        else:
+            kl_loss = KL_loss(mu, logvar) * cfg.TRAIN.COEFF.KL
         errG_total = errG_total + kl_loss
         errG_total.backward()
         self.optimizerG.step()
@@ -703,15 +731,23 @@ class condGANTrainer(object):
                 #######################################################
                 # (0) Prepare training data
                 ######################################################
-                self.imgs_tcpu, self.real_imgs, self.wrong_imgs, \
+                if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+                    self.imgs_tcpu, self.real_imgs, self.wrong_imgs, \
+                        self.txt_embeddings = self.prepare_data(data)
+                else:
+                    self.imgs_tcpu, self.real_imgs, self.wrong_imgs, \
                     self.txt_embedding = self.prepare_data(data)
 
                 #######################################################
                 # (1) Generate fake images
                 ######################################################
                 noise.data.normal_(0, 1)
-                self.fake_imgs, self.mu, self.logvar = \
-                    self.netG(noise, self.txt_embedding)
+                if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+                    self.fake_imgs, self.mus, self.logvars = \
+                        self.netG(noise, self.txt_embeddings)
+                else:
+                    self.fake_imgs, self.mu, self.logvar = \
+                        self.netG(noise, self.txt_embedding)
 
                 #######################################################
                 # (2) Update D network
@@ -748,8 +784,12 @@ class condGANTrainer(object):
                     backup_para = copy_G_params(self.netG)
                     load_params(self.netG, avg_param_G)
                     #
-                    self.fake_imgs, _, _ = \
-                        self.netG(fixed_noise, self.txt_embedding)
+                    if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+                        self.fake_imgs, _, _ = \
+                            self.netG(fixed_noise, self.txt_embeddings)
+                    else:
+                        self.fake_imgs, _, _ = \
+                            self.netG(fixed_noise, self.txt_embedding)
                     save_img_results(self.imgs_tcpu, self.fake_imgs, self.num_Ds,
                                      count, self.image_dir, self.summary_writer)
                     #

@@ -159,6 +159,7 @@ class INIT_STAGE_G(nn.Module):
 
     def forward(self, z_code, c_code=None):
         if cfg.GAN.B_CONDITION and c_code is not None:
+
             in_code = torch.cat((c_code, z_code), 1)
         else:
             in_code = z_code
@@ -282,6 +283,81 @@ class G_NET(nn.Module):
 
         return fake_imgs, mu, logvar
 
+
+class G_NET_MULTI_CAPTION(nn.Module):
+    def __init__(self):
+        super(G_NET_MULTI_CAPTION, self).__init__()
+        self.gf_dim = cfg.GAN.GF_DIM
+        self.define_module()
+
+    def define_module(self):
+        if cfg.GAN.B_CONDITION:
+            self.ca_net = CA_NET()
+
+        if cfg.TREE.BRANCH_NUM > 0:
+            self.h_net1 = INIT_STAGE_G(self.gf_dim * 16)
+            self.img_net1 = GET_IMAGE_G(self.gf_dim)
+        if cfg.TREE.BRANCH_NUM > 1:
+            self.h_net2 = NEXT_STAGE_G(self.gf_dim)
+            self.img_net2 = GET_IMAGE_G(self.gf_dim // 2)
+        if cfg.TREE.BRANCH_NUM > 2:
+            self.h_net3 = NEXT_STAGE_G(self.gf_dim // 2)
+            self.img_net3 = GET_IMAGE_G(self.gf_dim // 4)
+        if cfg.TREE.BRANCH_NUM > 3:  # Recommended structure (mainly limited by GPU memory), and not test yet
+            self.h_net4 = NEXT_STAGE_G(self.gf_dim // 4, num_residual=1)
+            self.img_net4 = GET_IMAGE_G(self.gf_dim // 8)
+        if cfg.TREE.BRANCH_NUM > 4:
+            self.h_net4 = NEXT_STAGE_G(self.gf_dim // 8, num_residual=1)
+            self.img_net4 = GET_IMAGE_G(self.gf_dim // 16)
+
+    def forward(self, z_code, text_embeddings=None):
+        c_codes = []
+        mus = []
+        logvars = []
+        # print('JKJ::1 = ', text_embeddings.size())
+        # print('JKJ::2 = ', text_embeddings.size(1))
+        # print('JKJ::3 = ', text_embeddings[:, 0, :].size())
+        # print('JKJ::4 = ', text_embeddings[:, 0, :])
+        # Getting the c_code, mu and var for all the captions for the single image.
+        if cfg.GAN.B_CONDITION and text_embeddings is not None:
+            # print "Len: ", len(text_embeddings)
+            for i in range(text_embeddings.size(1)):
+                text_embedding = text_embeddings[:, i, :]
+                # print 'text_embedding.size()', text_embedding.size()
+                c, m, l = self.ca_net(text_embedding)
+                # print 'c.size()', c.size()
+                # print 'm.size()', m.size()
+                # print 'l.size()', l.size()
+                c_codes.append(c)
+                mus.append(m)
+                logvars.append(l)
+        else:
+            c_code, mu, logvar = [z_code], None, None
+
+        # import numpy
+        # print 'c_codes.shape', numpy.array(c_codes).shape
+        # print 'mus.shape', numpy.array(mus).shape
+        # print 'logvars.shape', numpy.array(logvars).shape
+
+        fake_imgs = []
+        if cfg.TREE.BRANCH_NUM > 0:
+            h_code1 = self.h_net1(z_code, c_codes[0])
+            fake_img1 = self.img_net1(h_code1)
+            fake_imgs.append(fake_img1)
+        if cfg.TREE.BRANCH_NUM > 1:
+            h_code2 = self.h_net2(h_code1, c_codes[1])
+            fake_img2 = self.img_net2(h_code2)
+            fake_imgs.append(fake_img2)
+        if cfg.TREE.BRANCH_NUM > 2:
+            h_code3 = self.h_net3(h_code2, c_codes[2])
+            fake_img3 = self.img_net3(h_code3)
+            fake_imgs.append(fake_img3)
+        if cfg.TREE.BRANCH_NUM > 3:
+            h_code4 = self.h_net4(h_code3, c_codes[3])
+            fake_img4 = self.img_net4(h_code4)
+            fake_imgs.append(fake_img4)
+
+        return fake_imgs, mus, logvars
 
 # ############## D networks ################################################
 def Block3x3_leakRelu(in_planes, out_planes):

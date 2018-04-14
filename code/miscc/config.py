@@ -23,6 +23,7 @@ __C.WORKERS = 6
 __C.TREE = edict()
 __C.TREE.BRANCH_NUM = 3
 __C.TREE.BASE_SIZE = 64
+__C.TREE.MULTIPLE_TEXT_CONDITIONING = True    # Condition each generator/discriminator pair on different text inputs
 
 
 # Test options
