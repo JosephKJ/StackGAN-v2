@@ -869,7 +869,12 @@ class condGANTrainer(object):
             # Build and load the generator
             if split_dir == 'test':
                 split_dir = 'valid'
-            netG = G_NET()
+
+            if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+                netG = G_NET_MULTI_CAPTION()
+            else:
+                netG = G_NET()
+
             netG.apply(weights_init)
             netG = torch.nn.DataParallel(netG, device_ids=self.gpus)
             print(netG)
@@ -909,25 +914,30 @@ class condGANTrainer(object):
                 noise.data.resize_(batch_size, nz)
                 noise.data.normal_(0, 1)
 
-                fake_img_list = []
-                for i in range(embedding_dim):
-                    fake_imgs, _, _ = netG(noise, t_embeddings[:, i, :])
+                if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+                    fake_imgs, _, _ = netG(noise, t_embeddings)
+                    self.save_singleimages(fake_imgs[-1], filenames,
+                                           save_dir, split_dir, 1, 256)
+                else:
+                    fake_img_list = []
+                    for i in range(embedding_dim):
+                        fake_imgs, _, _ = netG(noise, t_embeddings[:, i, :])
+                        if cfg.TEST.B_EXAMPLE:
+                            # fake_img_list.append(fake_imgs[0].data.cpu())
+                            # fake_img_list.append(fake_imgs[1].data.cpu())
+                            fake_img_list.append(fake_imgs[2].data.cpu())
+                        else:
+                            self.save_singleimages(fake_imgs[-1], filenames,
+                                                   save_dir, split_dir, i, 256)
+                            # self.save_singleimages(fake_imgs[-2], filenames,
+                            #                        save_dir, split_dir, i, 128)
+                            # self.save_singleimages(fake_imgs[-3], filenames,
+                            #                        save_dir, split_dir, i, 64)
+                        # break
                     if cfg.TEST.B_EXAMPLE:
-                        # fake_img_list.append(fake_imgs[0].data.cpu())
-                        # fake_img_list.append(fake_imgs[1].data.cpu())
-                        fake_img_list.append(fake_imgs[2].data.cpu())
-                    else:
-                        self.save_singleimages(fake_imgs[-1], filenames,
-                                               save_dir, split_dir, i, 256)
-                        # self.save_singleimages(fake_imgs[-2], filenames,
-                        #                        save_dir, split_dir, i, 128)
-                        # self.save_singleimages(fake_imgs[-3], filenames,
-                        #                        save_dir, split_dir, i, 64)
-                    # break
-                if cfg.TEST.B_EXAMPLE:
-                    # self.save_superimages(fake_img_list, filenames,
-                    #                       save_dir, split_dir, 64)
-                    # self.save_superimages(fake_img_list, filenames,
-                    #                       save_dir, split_dir, 128)
-                    self.save_superimages(fake_img_list, filenames,
-                                          save_dir, split_dir, 256)
+                        # self.save_superimages(fake_img_list, filenames,
+                        #                       save_dir, split_dir, 64)
+                        # self.save_superimages(fake_img_list, filenames,
+                        #                       save_dir, split_dir, 128)
+                        self.save_superimages(fake_img_list, filenames,
+                                              save_dir, split_dir, 256)
