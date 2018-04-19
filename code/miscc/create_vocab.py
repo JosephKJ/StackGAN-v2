@@ -81,5 +81,5 @@ def load_filenames(data_dir):
 if __name__ == '__main__':
     data_dir = '../data/birds'
     filenames = load_filenames(data_dir)
-    vocab_path = os.path.join(data_dir + 'cub_vocab.pkl')
+    vocab_path = os.path.join(data_dir, 'cub_vocab.pkl')
     create_CUB_vocab(data_dir, filenames, vocab_path)
