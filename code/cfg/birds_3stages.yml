@@ -5,7 +5,7 @@ EMBEDDING_TYPE: 'cnn-rnn'
 DATA_DIR: '../data/birds'
 VOCAB_FILENAME: 'cub_vocab.pkl'
 GPU_ID: '0'
-WORKERS: 1
+WORKERS: 4
 
 TREE:
     BRANCH_NUM: 3
