@@ -1,4 +1,4 @@
-import cPickle as pickle
+import pickle
 import os
 import nltk
 from collections import Counter
@@ -45,6 +45,8 @@ def create_CUB_vocab(data_dir, caption_filenames, vocab_path, threshold=1):
 
     # Adding words from each caption
     counter = Counter()
+    lens = []
+
     for i, key in enumerate(caption_filenames):
         caption_name = '%s/text/%s.txt' % (data_dir, key)
 
@@ -55,6 +57,7 @@ def create_CUB_vocab(data_dir, caption_filenames, vocab_path, threshold=1):
             if len(caption) > 0:
                 caption = caption.replace("\ufffd\ufffd", " ")
                 tokens = nltk.tokenize.word_tokenize(caption.lower())
+                lens.append(len(tokens))
                 counter.update(tokens)
 
         print('[%d/%d] Creating vocabulary.' %(i, len(caption_filenames)))
@@ -64,10 +67,14 @@ def create_CUB_vocab(data_dir, caption_filenames, vocab_path, threshold=1):
     for word in words:
         vocab.add_word(word)
 
-    with open(vocab_path, 'wb') as f:
-        pickle.dump(vocab, f)
+    # with open(vocab_path, 'wb') as f:
+    #     pickle.dump(vocab, f)
 
+    import numpy
+    print('Max Len: ', max(lens))
+    print('Average Len: ', numpy.mean(lens))
     print('Created vocabulary. Total items are: %d' %(len(vocab)))
+    return vocab
 
 
 def load_filenames(data_dir):

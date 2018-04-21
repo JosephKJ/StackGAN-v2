@@ -9,12 +9,16 @@ import torchvision.transforms as transforms
 from PIL import Image
 import PIL
 import os
+import re
 import os.path
 import pickle
 import random
 import numpy as np
 import pandas as pd
 from miscc.config import cfg
+from miscc.create_vocab import *
+from torch._six import string_classes, int_classes
+import collections
 
 import torch.utils.data as data
 from PIL import Image
@@ -24,6 +28,8 @@ import six
 import string
 import sys
 import torch
+import nltk
+
 if sys.version_info[0] == 2:
     import cPickle as pickle
 else:
@@ -207,10 +213,25 @@ class TextDataset(data.Dataset):
         self.class_id = self.load_class_id(split_dir, len(self.filenames))
         self.captions = self.load_all_captions()
 
+        if cfg.TREE.ENSURE_CAPTION_CONSISTENCY:
+            self.vocab = self.load_vocabulary()
+
         if cfg.TRAIN.FLAG:
             self.iterator = self.prepair_training_pairs
         else:
             self.iterator = self.prepair_test_pairs
+
+    def load_vocabulary(self):
+        data_dir = self.data_dir
+        filenames = self.filenames
+        vocab_path = os.path.join(data_dir, cfg.VOCAB_FILENAME)
+        if not os.path.exists(vocab_path):
+            vocab = create_CUB_vocab(data_dir, filenames, vocab_path)
+        else:
+            with open(vocab_path, 'rb') as f:
+                vocab = pickle.load(f)
+            print ('Loaded vocabulary.')
+        return vocab
 
     def load_bbox(self):
         data_dir = self.data_dir
@@ -282,6 +303,27 @@ class TextDataset(data.Dataset):
         print('Load filenames from: %s (%d)' % (filepath, len(filenames)))
         return filenames
 
+    def build_caption_tensors(self, captions):
+        vocab = self.vocab
+        caption_tensor = []
+        len_vector = []
+        for caption in captions:
+            tokens = nltk.tokenize.word_tokenize(str(caption).lower())
+            target = list()
+            target.append(vocab('<start>'))
+            target.extend([vocab(word) for word in tokens])
+            target.append(vocab('<end>'))
+            len_vector.append(len(target))
+            target = torch.Tensor(target)
+
+            target_padded = torch.zeros(cfg.TREE.MAX_CAPTION_LEN).long()
+            end = len(target)
+            target_padded[:end] = target[:end]
+
+            caption_tensor.append(target_padded)
+        len_vector = torch.LongTensor(len_vector)
+        return torch.stack(caption_tensor, 0), len_vector
+
     def prepair_training_pairs(self, index):
         key = self.filenames[index]
         if self.bbox is not None:
@@ -290,6 +332,12 @@ class TextDataset(data.Dataset):
         else:
             bbox = None
             data_dir = self.data_dir
+
+        caption_tensors = None
+        len_vector = None
+        if cfg.TREE.ENSURE_CAPTION_CONSISTENCY:
+            caption_tensors, len_vector = self.build_caption_tensors(self.captions[key])
+
         # captions = self.captions[key]
         embeddings = self.embeddings[index, :, :]
         img_name = '%s/images/%s.jpg' % (data_dir, key)
@@ -321,7 +369,7 @@ class TextDataset(data.Dataset):
                     transformed_embeddings[i] = self.target_transform(embeddings[i, :])
                 embedding = transformed_embeddings
 
-        return imgs, wrong_imgs, embedding, key  # captions
+        return imgs, wrong_imgs, embedding, key, caption_tensors, len_vector  # captions
 
     def prepair_test_pairs(self, index):
         key = self.filenames[index]
@@ -347,3 +395,77 @@ class TextDataset(data.Dataset):
 
     def __len__(self):
         return len(self.filenames)
+
+    def collator(self, batch):
+        _use_shared_memory = False
+
+        r"""Puts each data field into a tensor with outer dimension batch size"""
+        error_msg = "batch must contain tensors, numbers, dicts or lists; found {}"
+        elem_type = type(batch[0])
+
+        print ('elem_type: ', elem_type)
+
+        if torch.is_tensor(batch[0]):
+            print('Inside tensor block.')
+            out = None
+            return torch.stack(batch, 0, out=out)
+        elif elem_type.__module__ == 'numpy' and elem_type.__name__ != 'str_' \
+                and elem_type.__name__ != 'string_':
+            print ('Inside Numpy block.')
+            elem = batch[0]
+            if elem_type.__name__ == 'ndarray':
+                print('Inside Numpy block 1.')
+                # array of string classes and object
+                if re.search('[SaUO]', elem.dtype.str) is not None:
+                    raise TypeError(error_msg.format(elem.dtype))
+
+                return torch.stack([torch.from_numpy(b) for b in batch], 0)
+            if elem.shape == ():  # scalars
+                print('Inside Numpy block 2.')
+                py_type = float if elem.dtype.name.startswith('float') else int
+                return numpy_type_map[elem.dtype.name](list(map(py_type, batch)))
+        elif isinstance(batch[0], int_classes):
+            return torch.LongTensor(batch)
+        elif isinstance(batch[0], float):
+            return torch.DoubleTensor(batch)
+        elif isinstance(batch[0], string_classes):
+            print ('Inside string_classes block.')
+            return batch
+        elif isinstance(batch[0], collections.Mapping):
+            print('Inside mapping block.')
+
+            return {key: self.collator([d[key] for d in batch]) for key in batch[0]}
+        elif isinstance(batch[0], collections.Sequence):
+            print('Inside Sequence block.')
+
+            transposed = zip(*batch)
+            return [self.collator(samples) for samples in transposed]
+
+        raise TypeError((error_msg.format(type(batch[0]))))
+
+        #
+        # imgs, wrong_imgs, embedding, key, caption_tensors, len_vector = zip(*data)
+        #
+        # print('-----------**Inside collator: S**----------')
+        # print([type(d) for d in zip(*data)])
+        # print([len(d) for d in zip(*data)])
+        # print('-----------**Inside collator: E**----------')
+        #
+        # # max_len_across_batch = max([len(cap) for caption_tensor in caption_tensors for cap in caption_tensor])
+        # # c_tensors = []
+        # # len_of_tensors = []
+        # # for caption_tensor in caption_tensors:
+        # #     targets = torch.zeros(len(caption_tensor), max_len_across_batch).long()
+        # #     len_of_captions = [len(cap) for cap in caption_tensor]
+        # #     for i, cap in enumerate(caption_tensor):
+        # #         end = len_of_captions[i]
+        # #         targets[i, :end] = cap[:end]
+        # #     c_tensors.append(targets)
+        # #     len_of_tensors.append(len_of_captions)
+        # #
+        # # # c_tensors = torch.Tensor(c_tensors)
+        # # print ('len: ', len(c_tensors))
+        # # print (c_tensors)
+        # # return imgs, wrong_imgs, torch.from_numpy(embedding[0]), key, c_tensors, len_of_tensors
+        # # # return zip(imgs, wrong_imgs, embedding, key, caption_tensors)
+        # return data

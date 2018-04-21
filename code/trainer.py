@@ -11,6 +11,7 @@ import numpy as np
 import os
 import time
 from PIL import Image, ImageFont, ImageDraw
+from torch.nn.utils.rnn import pack_padded_sequence
 from copy import deepcopy
 
 from miscc.config import cfg
@@ -19,7 +20,7 @@ from miscc.utils import mkdir_p
 from tensorboard import summary
 from tensorboard import FileWriter
 
-from model import G_NET, G_NET_MULTI_CAPTION, D_NET64, D_NET128, D_NET256, D_NET512, D_NET1024, INCEPTION_V3
+from model import G_NET, G_NET_MULTI_CAPTION, D_NET64, D_NET128, D_NET256, D_NET512, D_NET1024, INCEPTION_V3, CCN_NET
 
 
 
@@ -109,6 +110,12 @@ def load_network(gpus):
         netG.apply(weights_init)
         netG = torch.nn.DataParallel(netG, device_ids=gpus)
         print(netG)
+
+        if cfg.TREE.ENSURE_CAPTION_CONSISTENCY:
+            ccNet = CCN_NET()
+            ccNet.apply(weights_init)
+            ccNet = torch.nn.DataParallel(ccNet, device_ids=gpus)
+            print (ccNet)
     else:
         netG = G_NET()
         netG.apply(weights_init)
@@ -158,12 +165,15 @@ def load_network(gpus):
         for i in range(len(netsD)):
             netsD[i].cuda()
         inception_model = inception_model.cuda()
+        if cfg.TREE.ENSURE_CAPTION_CONSISTENCY:
+            ccNet.cuda()
+
     inception_model.eval()
 
-    return netG, netsD, len(netsD), inception_model, count
+    return netG, netsD, len(netsD), inception_model, count, ccNet
 
 
-def define_optimizers(netG, netsD):
+def define_optimizers(netG, netsD, ccNet):
     optimizersD = []
     num_Ds = len(netsD)
     for i in range(num_Ds):
@@ -179,7 +189,12 @@ def define_optimizers(netG, netsD):
     optimizerG = optim.Adam(netG.parameters(),
                             lr=cfg.TRAIN.GENERATOR_LR,
                             betas=(0.5, 0.999))
-    return optimizerG, optimizersD
+
+    optimizerCCN = optim.Adam(ccNet.parameters(),
+                            lr=cfg.TRAIN.GENERATOR_LR,
+                            betas=(0.5, 0.999))
+
+    return optimizerG, optimizersD, optimizerCCN
 
 
 def save_model(netG, avg_param_G, netsD, epoch, model_dir):
@@ -551,13 +566,30 @@ class condGANTrainer(object):
         self.num_batches = len(self.data_loader)
 
     def prepare_data(self, data):
-        imgs, w_imgs, t_embedding, _ = data
+        # imgs, w_imgs, t_embedding, _, caption_tensors, len_of_tensors = data
+        print ('-----------***----------')
+        print (len(data))
+        print ( [type(d) for d in data] )
+        print ( [len(d) for d in data] )
+        print ('-----------***----------')
+        print (type(data[0]))
 
+        imgs, w_imgs, t_embedding, _, caption_tensors, len_vector = data
+
+        v_caption_tensors = []
+        v_len_vector = []
         real_vimgs, wrong_vimgs = [], []
         if cfg.CUDA:
             vembedding = Variable(t_embedding).cuda()
+            if caption_tensors is not None:
+                v_caption_tensors = Variable(caption_tensors).cuda()
+                v_len_vector = len_vector.cuda()
         else:
             vembedding = Variable(t_embedding)
+            if caption_tensors is not None:
+                v_caption_tensors = Variable(caption_tensors)
+                v_len_vector = len_vector
+
         for i in range(self.num_Ds):
             if cfg.CUDA:
                 real_vimgs.append(Variable(imgs[i]).cuda())
@@ -565,7 +597,8 @@ class condGANTrainer(object):
             else:
                 real_vimgs.append(Variable(imgs[i]))
                 wrong_vimgs.append(Variable(w_imgs[i]))
-        return imgs, real_vimgs, wrong_vimgs, vembedding
+
+        return imgs, real_vimgs, wrong_vimgs, vembedding, v_caption_tensors, v_len_vector
 
     def train_Dnet(self, idx, count):
         flag = count % 100
@@ -690,13 +723,65 @@ class condGANTrainer(object):
         self.optimizerG.step()
         return kl_loss, errG_total
 
+    def train_CCnet(self, count):
+        self.ccNet.zero_grad()
+        total_loss = 0
+        flag = count % 100
+        batch_size = self.real_imgs[0].size(0)
+        criterion = nn.CrossEntropyLoss()
+
+        caption_tensors, len_vector, pre_d_activations = \
+            self.caption_tensors, self.len_vector, self.pre_d_activations
+
+        # for i in range(self.num_Ds):
+        for i in range(1):
+            activation = pre_d_activations[i]
+            caption_features = caption_tensors[:, i, :]
+            len_of_caption = len_vector[:, i]
+
+            # Cycling
+            if i == (self.num_Ds - 1):
+                caption_features = caption_tensors[:, 0, :]
+                len_of_caption = len_vector[:, 0]
+
+            zipped = zip (activation, caption_features, len_of_caption)
+            zipped = sorted(zipped, key=lambda x: x[2], reverse=True)
+            acts, cap_fs, len_of_caps = zip(*zipped)
+
+            acts = torch.stack(acts)
+            cap_fs = torch.stack(cap_fs)
+
+            predictions = self.ccNet(acts, cap_fs[:, :-1], [l - 1 for l in len_of_caps])
+            predictions = pack_padded_sequence(predictions.data, [l - 1 for l in len_of_caps], batch_first=True)[0]
+            targets = pack_padded_sequence(cap_fs[:, 1:].data, [l - 1 for l in len_of_caps], batch_first=True)[0]
+
+
+            # predictions = self.ccNet(activation, caption_features, len_of_caption)
+            # predictions = pack_padded_sequence(predictions, len_of_caption , batch_first=True)[0]
+            # targets = pack_padded_sequence(caption_features, len_of_caption , batch_first=True)[0]
+
+
+            predictions = Variable(predictions, requires_grad=True).cuda()
+            targets = Variable(targets).cuda()
+
+            loss = criterion(predictions, targets)
+            total_loss += loss
+
+            if flag == 0:
+                summary_CCN = summary.scalar('CCN_loss%d' % i, loss.data[0])
+                self.summary_writer.add_summary(summary_CCN, count)
+
+        total_loss.backward()
+        self.optimizerCCN.step()
+        return total_loss
+
     def train(self):
         self.netG, self.netsD, self.num_Ds,\
-            self.inception_model, start_count = load_network(self.gpus)
+            self.inception_model, start_count, self.ccNet = load_network(self.gpus)
         avg_param_G = copy_G_params(self.netG)
 
-        self.optimizerG, self.optimizersD = \
-            define_optimizers(self.netG, self.netsD)
+        self.optimizerG, self.optimizersD, self.optimizerCCN = \
+            define_optimizers(self.netG, self.netsD, self.ccNet)
 
         self.criterion = nn.BCELoss()
 
@@ -733,17 +818,17 @@ class condGANTrainer(object):
                 ######################################################
                 if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
                     self.imgs_tcpu, self.real_imgs, self.wrong_imgs, \
-                        self.txt_embeddings = self.prepare_data(data)
+                        self.txt_embeddings, self.caption_tensors, self.len_vector = self.prepare_data(data)
                 else:
                     self.imgs_tcpu, self.real_imgs, self.wrong_imgs, \
-                    self.txt_embedding = self.prepare_data(data)
+                    self.txt_embedding, self.caption_tensors, self.len_vector = self.prepare_data(data)
 
                 #######################################################
                 # (1) Generate fake images
                 ######################################################
                 noise.data.normal_(0, 1)
                 if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
-                    self.fake_imgs, self.mus, self.logvars = \
+                    self.fake_imgs, self.mus, self.logvars, self.pre_d_activations = \
                         self.netG(noise, self.txt_embeddings)
                 else:
                     self.fake_imgs, self.mu, self.logvar = \
@@ -764,6 +849,14 @@ class condGANTrainer(object):
                 for p, avg_p in zip(self.netG.parameters(), avg_param_G):
                     avg_p.mul_(0.999).add_(0.001, p.data)
 
+
+                #######################################################
+                # (4) Update Caption Consistency Network
+                ######################################################
+                err_CCN_total = 0
+                if cfg.TREE.ENSURE_CAPTION_CONSISTENCY:
+                    err_CCN_total = self.train_CCnet(count)
+
                 # for inception score
                 pred = self.inception_model(self.fake_imgs[-1].detach())
                 predictions.append(pred.data.cpu().numpy())
@@ -772,9 +865,11 @@ class condGANTrainer(object):
                     summary_D = summary.scalar('D_loss', errD_total.data[0])
                     summary_G = summary.scalar('G_loss', errG_total.data[0])
                     summary_KL = summary.scalar('KL_loss', kl_loss.data[0])
+                    summary_CCN = summary.scalar('CCN_loss', err_CCN_total.data[0])
                     self.summary_writer.add_summary(summary_D, count)
                     self.summary_writer.add_summary(summary_G, count)
                     self.summary_writer.add_summary(summary_KL, count)
+                    self.summary_writer.add_summary(summary_CCN, count)
 
                 count = count + 1
 
@@ -785,7 +880,7 @@ class condGANTrainer(object):
                     load_params(self.netG, avg_param_G)
                     #
                     if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
-                        self.fake_imgs, _, _ = \
+                        self.fake_imgs, _, _, _ = \
                             self.netG(fixed_noise, self.txt_embeddings)
                     else:
                         self.fake_imgs, _, _ = \
@@ -812,11 +907,11 @@ class condGANTrainer(object):
 
             end_t = time.time()
             print('''[%d/%d][%d]
-                         Loss_D: %.2f Loss_G: %.2f Loss_KL: %.2f Time: %.2fs
+                         Loss_D: %.2f Loss_G: %.2f Loss_KL: %.2f Loss_CCN: %.2f Time: %.2fs
                       '''  # D(real): %.4f D(wrong):%.4f  D(fake) %.4f
                   % (epoch, self.max_epoch, self.num_batches,
                      errD_total.data[0], errG_total.data[0],
-                     kl_loss.data[0], end_t - start_t))
+                     kl_loss.data[0], err_CCN_total.data[0], end_t - start_t))
 
         save_model(self.netG, avg_param_G, self.netsD, count, self.model_dir)
         self.summary_writer.close()

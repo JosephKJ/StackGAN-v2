@@ -14,6 +14,7 @@ __C.DATASET_NAME = 'birds'
 __C.EMBEDDING_TYPE = 'cnn-rnn'
 __C.CONFIG_NAME = ''
 __C.DATA_DIR = ''
+__C.VOCAB_FILENAME = ''
 
 __C.GPU_ID = '0'
 __C.CUDA = True
@@ -24,7 +25,8 @@ __C.TREE = edict()
 __C.TREE.BRANCH_NUM = 3
 __C.TREE.BASE_SIZE = 64
 __C.TREE.MULTIPLE_TEXT_CONDITIONING = True    # Condition each generator/discriminator pair on different text inputs
-
+__C.TREE.ENSURE_CAPTION_CONSISTENCY = True
+__C.TREE.MAX_CAPTION_LEN = 70
 
 # Test options
 __C.TEST = edict()

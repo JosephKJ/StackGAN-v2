@@ -3,18 +3,21 @@ CONFIG_NAME: '3stages'
 DATASET_NAME: 'birds'
 EMBEDDING_TYPE: 'cnn-rnn'
 DATA_DIR: '../data/birds'
+VOCAB_FILENAME: 'cub_vocab.pkl'
 GPU_ID: '0'
-WORKERS: 4
+WORKERS: 1
 
 TREE:
     BRANCH_NUM: 3
     MULTIPLE_TEXT_CONDITIONING: True
+    ENSURE_CAPTION_CONSISTENCY: True
+    MAX_CAPTION_LEN: 70
 
 
 TRAIN:
     FLAG: True
-    NET_G: '../output/birds_3stages_2018_04_14_22_04_02/Model/netG_73229.pth'  # '../output/birds_3stages/Model/netG_epoch_700.pth'
-    NET_D: '../output/birds_3stages_2018_04_14_22_04_02/Model/netD'  # '../output/birds_3stages/Model/netD'
+    NET_G: ''  # '../output/birds_3stages/Model/netG_epoch_700.pth'
+    NET_D: ''  # '../output/birds_3stages/Model/netD'
     BATCH_SIZE: 24
     MAX_EPOCH: 1800
     SNAPSHOT_INTERVAL: 2000
@@ -30,7 +33,7 @@ GAN:
     GF_DIM: 64
     Z_DIM: 100
     R_NUM: 2
-    B_CONDITION: True # Whether to have conditional augmentation, or not.
+    B_CONDITION: True # Whether to have conditioning, or not.
 
 TEXT:
     DIMENSION: 1024

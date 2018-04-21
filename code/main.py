@@ -130,7 +130,7 @@ if __name__ == "__main__":
     num_gpu = len(cfg.GPU_ID.split(','))
     dataloader = torch.utils.data.DataLoader(
         dataset, batch_size=cfg.TRAIN.BATCH_SIZE * num_gpu,
-        drop_last=True, shuffle=bshuffle, num_workers=int(cfg.WORKERS))
+        drop_last=True, shuffle=bshuffle, num_workers=int(cfg.WORKERS)) #, collate_fn=dataset.collator)
 
     # Define models and go to train/evaluate
     if not cfg.GAN.B_CONDITION:
