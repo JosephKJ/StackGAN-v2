@@ -566,14 +566,6 @@ class condGANTrainer(object):
         self.num_batches = len(self.data_loader)
 
     def prepare_data(self, data):
-        # imgs, w_imgs, t_embedding, _, caption_tensors, len_of_tensors = data
-        print ('-----------***----------')
-        print (len(data))
-        print ( [type(d) for d in data] )
-        print ( [len(d) for d in data] )
-        print ('-----------***----------')
-        print (type(data[0]))
-
         imgs, w_imgs, t_embedding, _, caption_tensors, len_vector = data
 
         v_caption_tensors = []

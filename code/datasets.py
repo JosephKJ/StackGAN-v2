@@ -318,6 +318,8 @@ class TextDataset(data.Dataset):
 
             target_padded = torch.zeros(cfg.TREE.MAX_CAPTION_LEN).long()
             end = len(target)
+            end = cfg.TREE.MAX_CAPTION_LEN if end > cfg.TREE.MAX_CAPTION_LEN else end
+            # print ('end index: ', end)
             target_padded[:end] = target[:end]
 
             caption_tensor.append(target_padded)
