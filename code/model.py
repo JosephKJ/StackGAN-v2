@@ -232,6 +232,16 @@ class GET_IMAGE_G(nn.Module):
         return out_img
 
 
+class POOL_TO_FIXED_SIZE(nn.Module):
+    def __init__(self, output_size):
+        super(POOL_TO_FIXED_SIZE, self).__init__()
+        self.pool = nn.AdaptiveMaxPool2d(output_size)
+
+    def forward(self, activations):
+        pooled_activations = self.pool(activations)
+        return pooled_activations
+
+
 class G_NET(nn.Module):
     def __init__(self):
         super(G_NET, self).__init__()
@@ -293,6 +303,7 @@ class G_NET_MULTI_CAPTION(nn.Module):
     def define_module(self):
         if cfg.GAN.B_CONDITION:
             self.ca_net = CA_NET()
+            self.pool_to_fixed_size = POOL_TO_FIXED_SIZE(cfg.TREE.LSTM_INPUT_SIZE)
 
         if cfg.TREE.BRANCH_NUM > 0:
             self.h_net1 = INIT_STAGE_G(self.gf_dim * 16)
@@ -331,27 +342,34 @@ class G_NET_MULTI_CAPTION(nn.Module):
         if cfg.TREE.BRANCH_NUM > 0:
             h_code1 = self.h_net1(z_code, c_codes[0])
             fake_img1 = self.img_net1(h_code1)
+            h_code1_pooled = self.pool_to_fixed_size(h_code1)
+
             fake_imgs.append(fake_img1)
-            pre_d_activations.append(h_code1)
+            pre_d_activations.append(h_code1_pooled)
 
         if cfg.TREE.BRANCH_NUM > 1:
             h_code2 = self.h_net2(h_code1, c_codes[1])
             fake_img2 = self.img_net2(h_code2)
+            h_code2_pooled = self.pool_to_fixed_size(h_code2)
+
             fake_imgs.append(fake_img2)
-            pre_d_activations.append(h_code2)
+            pre_d_activations.append(h_code2_pooled)
 
         if cfg.TREE.BRANCH_NUM > 2:
             h_code3 = self.h_net3(h_code2, c_codes[2])
             fake_img3 = self.img_net3(h_code3)
-            fake_imgs.append(fake_img3)
-            pre_d_activations.append(h_code3)
+            h_code3_pooled = self.pool_to_fixed_size(h_code3)
 
+            fake_imgs.append(fake_img3)
+            pre_d_activations.append(h_code3_pooled)
 
         if cfg.TREE.BRANCH_NUM > 3:
             h_code4 = self.h_net4(h_code3, c_codes[3])
             fake_img4 = self.img_net4(h_code4)
+            h_code4_pooled = self.pool_to_fixed_size(h_code4)
+
             fake_imgs.append(fake_img4)
-            pre_d_activations.append(h_code4)
+            pre_d_activations.append(h_code4_pooled)
 
         return fake_imgs, mus, logvars, pre_d_activations
 
@@ -661,12 +679,12 @@ class D_NET1024(nn.Module):
 
 class CCN_NET(nn.Module):
 
-    def __init__(self, vis_dim=64, vis_num=4096, embed_dim=512, hidden_dim=512,
+    def __init__(self, vis_dim=64, vis_num=cfg.TREE.LSTM_INPUT_SIZE*cfg.TREE.LSTM_INPUT_SIZE, embed_dim=512, hidden_dim=512,
                  vocab_size=10000, num_layers=1, dropout_ratio=0.5):
         super(CCN_NET, self).__init__()
 
         self.embed_dim = embed_dim
-        self.vis_dim = vis_dim
+        self.vis_dim = vis_dim      # The depth of the image feature tensor.
         self.vis_num = vis_num
         self.hidden_dim = hidden_dim
         self.vocab_size = vocab_size

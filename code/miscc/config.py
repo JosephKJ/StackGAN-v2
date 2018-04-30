@@ -27,6 +27,7 @@ __C.TREE.BASE_SIZE = 64
 __C.TREE.MULTIPLE_TEXT_CONDITIONING = True    # Condition each generator/discriminator pair on different text inputs
 __C.TREE.ENSURE_CAPTION_CONSISTENCY = True
 __C.TREE.MAX_CAPTION_LEN = 70
+__C.TREE.LSTM_INPUT_SIZE = 16
 
 # Test options
 __C.TEST = edict()
@@ -45,6 +46,7 @@ __C.TRAIN.GENERATOR_LR = 2e-4
 __C.TRAIN.FLAG = True
 __C.TRAIN.NET_G = ''
 __C.TRAIN.NET_D = ''
+__C.TRAIN.NET_CCN = ''
 
 __C.TRAIN.COEFF = edict()
 __C.TRAIN.COEFF.KL = 2.0

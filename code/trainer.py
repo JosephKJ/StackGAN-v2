@@ -105,17 +105,30 @@ def negative_log_posterior_probability(predictions, num_splits=1):
 
 
 def load_network(gpus):
+    ccNets = []
     if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
         netG = G_NET_MULTI_CAPTION()
         netG.apply(weights_init)
         netG = torch.nn.DataParallel(netG, device_ids=gpus)
         print(netG)
-
         if cfg.TREE.ENSURE_CAPTION_CONSISTENCY:
-            ccNet = CCN_NET()
-            ccNet.apply(weights_init)
-            ccNet = torch.nn.DataParallel(ccNet, device_ids=gpus)
-            print (ccNet)
+            if cfg.TREE.BRANCH_NUM > 0:
+                ccNets.append(CCN_NET(vis_dim=64))
+            if cfg.TREE.BRANCH_NUM > 1:
+                ccNets.append(CCN_NET(vis_dim=32))
+            if cfg.TREE.BRANCH_NUM > 2:
+                ccNets.append(CCN_NET(vis_dim=16))
+            if cfg.TREE.BRANCH_NUM > 3:
+                ccNets.append(CCN_NET(vis_dim=16))
+            if cfg.TREE.BRANCH_NUM > 4:
+                ccNets.append(CCN_NET(vis_dim=16))
+
+            for i in range(len(ccNets)):
+                ccNets[i].apply(weights_init)
+                ccNets[i] = torch.nn.DataParallel(ccNets[i], device_ids=gpus)
+
+            print('Multiple Caption Consistency Networks are ready.')
+
     else:
         netG = G_NET()
         netG.apply(weights_init)
@@ -158,23 +171,34 @@ def load_network(gpus):
             state_dict = torch.load('%s%d.pth' % (cfg.TRAIN.NET_D, i))
             netsD[i].load_state_dict(state_dict)
 
+
+    if cfg.TRAIN.NET_CCN != '':
+        for i in range(len(ccNets)):
+            print('Load %s_%d.pth' % (cfg.TRAIN.NET_CCN, i))
+            state_dict = torch.load('%s%d.pth' % (cfg.TRAIN.NET_CCN, i))
+            ccNets[i].load_state_dict(state_dict)
+
     inception_model = INCEPTION_V3()
 
     if cfg.CUDA:
         netG.cuda()
         for i in range(len(netsD)):
             netsD[i].cuda()
-        inception_model = inception_model.cuda()
+
         if cfg.TREE.ENSURE_CAPTION_CONSISTENCY:
-            ccNet.cuda()
+            for i in range(len(ccNets)):
+                ccNets[i].cuda()
+
+        inception_model = inception_model.cuda()
 
     inception_model.eval()
 
-    return netG, netsD, len(netsD), inception_model, count, ccNet
+    return netG, netsD, len(netsD), inception_model, count, ccNets
 
 
-def define_optimizers(netG, netsD, ccNet):
+def define_optimizers(netG, netsD, ccNets):
     optimizersD = []
+    optimizersCCN = []
     num_Ds = len(netsD)
     for i in range(num_Ds):
         opt = optim.Adam(netsD[i].parameters(),
@@ -182,22 +206,21 @@ def define_optimizers(netG, netsD, ccNet):
                          betas=(0.5, 0.999))
         optimizersD.append(opt)
 
-    # G_opt_paras = []
-    # for p in netG.parameters():
-    #     if p.requires_grad:
-    #         G_opt_paras.append(p)
+
     optimizerG = optim.Adam(netG.parameters(),
                             lr=cfg.TRAIN.GENERATOR_LR,
                             betas=(0.5, 0.999))
 
-    optimizerCCN = optim.Adam(ccNet.parameters(),
-                            lr=cfg.TRAIN.GENERATOR_LR,
-                            betas=(0.5, 0.999))
+    for i in range(len(ccNets)):
+        optimizerCCN = optim.Adam(ccNets[i].parameters(),
+                                  lr=cfg.TRAIN.GENERATOR_LR,
+                                  betas=(0.5, 0.999))
+        optimizersCCN.append(optimizerCCN)
 
-    return optimizerG, optimizersD, optimizerCCN
+    return optimizerG, optimizersD, optimizersCCN
 
 
-def save_model(netG, avg_param_G, netsD, epoch, model_dir):
+def save_model(netG, avg_param_G, netsD, epoch, model_dir, ccNets):
     load_params(netG, avg_param_G)
     torch.save(
         netG.state_dict(),
@@ -207,7 +230,14 @@ def save_model(netG, avg_param_G, netsD, epoch, model_dir):
         torch.save(
             netD.state_dict(),
             '%s/netD%d.pth' % (model_dir, i))
-    print('Save G/Ds models.')
+
+    for i in range(len(ccNets)):
+        ccNet = ccNets[i]
+        torch.save(
+            ccNet.state_dict(),
+            '%s/CCN%d.pth' % (model_dir, i))
+
+    print('Save G, Ds, and CCN models.')
 
 
 def save_img_results(imgs_tcpu, fake_imgs, num_imgs,
@@ -715,8 +745,11 @@ class condGANTrainer(object):
         self.optimizerG.step()
         return kl_loss, errG_total
 
-    def train_CCnet(self, count):
-        self.ccNet.zero_grad()
+    def train_CCnet(self, i, count):
+
+        ccNet = self.ccNets[i]
+        ccNet.zero_grad()
+
         total_loss = 0
         flag = count % 100
         batch_size = self.real_imgs[0].size(0)
@@ -725,55 +758,57 @@ class condGANTrainer(object):
         caption_tensors, len_vector, pre_d_activations = \
             self.caption_tensors, self.len_vector, self.pre_d_activations
 
-        # for i in range(self.num_Ds):
-        for i in range(1):
-            activation = pre_d_activations[i]
-            caption_features = caption_tensors[:, i, :]
-            len_of_caption = len_vector[:, i]
+        activation = pre_d_activations[i]
+        caption_features = caption_tensors[:, i, :]
+        len_of_caption = len_vector[:, i]
 
-            # Cycling
-            if i == (self.num_Ds - 1):
-                caption_features = caption_tensors[:, 0, :]
-                len_of_caption = len_vector[:, 0]
+        # Cycling
+        if i == (self.num_Ds - 1):
+            caption_features = caption_tensors[:, 0, :]
+            len_of_caption = len_vector[:, 0]
 
-            zipped = zip (activation, caption_features, len_of_caption)
-            zipped = sorted(zipped, key=lambda x: x[2], reverse=True)
-            acts, cap_fs, len_of_caps = zip(*zipped)
+        zipped = zip (activation, caption_features, len_of_caption)
+        zipped = sorted(zipped, key=lambda x: x[2], reverse=True)
+        acts, cap_fs, len_of_caps = zip(*zipped)
 
-            acts = torch.stack(acts)
-            cap_fs = torch.stack(cap_fs)
+        acts = torch.stack(acts)
+        cap_fs = torch.stack(cap_fs)
 
-            predictions = self.ccNet(acts, cap_fs[:, :-1], [l - 1 for l in len_of_caps])
-            predictions = pack_padded_sequence(predictions.data, [l - 1 for l in len_of_caps], batch_first=True)[0]
-            targets = pack_padded_sequence(cap_fs[:, 1:].data, [l - 1 for l in len_of_caps], batch_first=True)[0]
+        predictions = ccNet(acts, cap_fs[:, :-1], [l - 1 for l in len_of_caps])
+        predictions = pack_padded_sequence(predictions.data, [l - 1 for l in len_of_caps], batch_first=True)[0]
+        targets = pack_padded_sequence(cap_fs[:, 1:].data, [l - 1 for l in len_of_caps], batch_first=True)[0]
 
 
-            # predictions = self.ccNet(activation, caption_features, len_of_caption)
-            # predictions = pack_padded_sequence(predictions, len_of_caption , batch_first=True)[0]
-            # targets = pack_padded_sequence(caption_features, len_of_caption , batch_first=True)[0]
+        # predictions = ccNet(activation, caption_features, len_of_caption)
+        # predictions = pack_padded_sequence(predictions, len_of_caption , batch_first=True)[0]
+        # targets = pack_padded_sequence(caption_features, len_of_caption , batch_first=True)[0]
 
 
-            predictions = Variable(predictions, requires_grad=True).cuda()
-            targets = Variable(targets).cuda()
+        predictions = Variable(predictions, requires_grad=True).cuda()
+        targets = Variable(targets).cuda()
 
-            loss = criterion(predictions, targets)
-            total_loss += loss
+        loss = criterion(predictions, targets)
+        total_loss += loss
 
-            if flag == 0:
-                summary_CCN = summary.scalar('CCN_loss%d' % i, loss.data[0])
-                self.summary_writer.add_summary(summary_CCN, count)
+        if flag == 0:
+            summary_CCN = summary.scalar('CCN_loss%d' % i, loss.data[0])
+            self.summary_writer.add_summary(summary_CCN, count)
 
+        # Compute the gradients
         total_loss.backward()
-        self.optimizerCCN.step()
+
+        # Update the network
+        self.optimizersCCN[i].step()
+
         return total_loss
 
     def train(self):
         self.netG, self.netsD, self.num_Ds,\
-            self.inception_model, start_count, self.ccNet = load_network(self.gpus)
+            self.inception_model, start_count, self.ccNets = load_network(self.gpus)
         avg_param_G = copy_G_params(self.netG)
 
-        self.optimizerG, self.optimizersD, self.optimizerCCN = \
-            define_optimizers(self.netG, self.netsD, self.ccNet)
+        self.optimizerG, self.optimizersD, self.optimizersCCN = \
+            define_optimizers(self.netG, self.netsD, self.ccNets)
 
         self.criterion = nn.BCELoss()
 
@@ -847,7 +882,8 @@ class condGANTrainer(object):
                 ######################################################
                 err_CCN_total = 0
                 if cfg.TREE.ENSURE_CAPTION_CONSISTENCY:
-                    err_CCN_total = self.train_CCnet(count)
+                    for i in range(self.num_Ds):
+                        err_CCN_total += self.train_CCnet(i, count)
 
                 # for inception score
                 pred = self.inception_model(self.fake_imgs[-1].detach())
@@ -866,7 +902,7 @@ class condGANTrainer(object):
                 count = count + 1
 
                 if count % cfg.TRAIN.SNAPSHOT_INTERVAL == 0:
-                    save_model(self.netG, avg_param_G, self.netsD, count, self.model_dir)
+                    save_model(self.netG, avg_param_G, self.netsD, count, self.model_dir, self.ccNets)
                     # Save images
                     backup_para = copy_G_params(self.netG)
                     load_params(self.netG, avg_param_G)
