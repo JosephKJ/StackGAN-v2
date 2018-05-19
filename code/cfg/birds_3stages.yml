@@ -15,9 +15,9 @@ TREE:
     LSTM_INPUT_SIZE: 16 # Spatial size of the image feature maps, passed to the LSTM
 
 TRAIN:
-    FLAG: True
-    NET_G: ''  # '../output/birds_3stages/Model/netG_epoch_700.pth'
-    NET_D: ''  # '../output/birds_3stages/Model/netD'
+    FLAG: False
+    NET_G: '../output/birds_3stages_2018_04_30_00_06_05/Model/netG_72000.pth'  # '../output/birds_3stages/Model/netG_epoch_700.pth'
+    NET_D: '../output/birds_3stages_2018_04_30_00_06_05/Model/netD'  # '../output/birds_3stages/Model/netD'
     NET_CCN: '' # '../output/birds_3stages/Model/CCN'
     BATCH_SIZE: 24
     MAX_EPOCH: 1800

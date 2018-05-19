@@ -25,7 +25,7 @@ __C.TREE = edict()
 __C.TREE.BRANCH_NUM = 3
 __C.TREE.BASE_SIZE = 64
 __C.TREE.MULTIPLE_TEXT_CONDITIONING = True    # Condition each generator/discriminator pair on different text inputs
-__C.TREE.ENSURE_CAPTION_CONSISTENCY = True
+__C.TREE.ENSURE_CAPTION_CONSISTENCY = False
 __C.TREE.MAX_CAPTION_LEN = 70
 __C.TREE.LSTM_INPUT_SIZE = 16
 

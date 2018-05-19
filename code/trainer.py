@@ -941,7 +941,7 @@ class condGANTrainer(object):
                      errD_total.data[0], errG_total.data[0],
                      kl_loss.data[0], err_CCN_total.data[0], end_t - start_t))
 
-        save_model(self.netG, avg_param_G, self.netsD, count, self.model_dir)
+        save_model(self.netG, avg_param_G, self.netsD, count, self.model_dir, self.ccNets)
         self.summary_writer.close()
 
     def save_superimages(self, images_list, filenames,
@@ -1038,13 +1038,13 @@ class condGANTrainer(object):
                 noise.data.normal_(0, 1)
 
                 if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
-                    fake_imgs, _, _ = netG(noise, t_embeddings)
+                    fake_imgs, _, _, _ = netG(noise, t_embeddings)
                     self.save_singleimages(fake_imgs[-1], filenames,
                                            save_dir, split_dir, 1, 256)
                 else:
                     fake_img_list = []
                     for i in range(embedding_dim):
-                        fake_imgs, _, _ = netG(noise, t_embeddings[:, i, :])
+                        fake_imgs, _, _, _ = netG(noise, t_embeddings[:, i, :])
                         if cfg.TEST.B_EXAMPLE:
                             # fake_img_list.append(fake_imgs[0].data.cpu())
                             # fake_img_list.append(fake_imgs[1].data.cpu())
