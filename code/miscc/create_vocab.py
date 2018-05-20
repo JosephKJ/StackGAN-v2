@@ -67,8 +67,8 @@ def create_CUB_vocab(data_dir, caption_filenames, vocab_path, threshold=1):
     for word in words:
         vocab.add_word(word)
 
-    # with open(vocab_path, 'wb') as f:
-    #     pickle.dump(vocab, f)
+    with open(vocab_path, 'wb') as f:
+        pickle.dump(vocab, f)
 
     import numpy
     print('Max Len: ', max(lens))
@@ -76,6 +76,58 @@ def create_CUB_vocab(data_dir, caption_filenames, vocab_path, threshold=1):
     print('Created vocabulary. Total items are: %d' %(len(vocab)))
     return vocab
 
+
+def create_FLOWER_vocab(data_dir, caption_filenames, vocab_path, class_id, threshold=1):
+    """Creates a vocabulary for the CUB dataset.
+
+    """
+
+    # def load_captions(caption_name):  # self,
+    #     cap_path = caption_name
+    #     with open(cap_path, "r") as f:
+    #         captions = f.read().decode('utf8').split('\n')
+    #     captions = [cap.replace("\ufffd\ufffd", " ")
+    #                 for cap in captions if len(cap) > 0]
+    #     return captions
+
+    vocab = Vocabulary()
+    vocab.add_word('<pad>')
+    vocab.add_word('<start>')
+    vocab.add_word('<end>')
+    vocab.add_word('<unk>')
+
+    # Adding words from each caption
+    counter = Counter()
+    lens = []
+
+    for i, key in enumerate(caption_filenames):
+        caption_name = '%s/text/class_%05d/%s.txt' % (data_dir, class_id[i], key.split('/')[1])
+
+        with open(caption_name, "r") as f:
+            captions = f.read().decode('utf8').split('\n')
+
+        for caption in captions:
+            if len(caption) > 0:
+                caption = caption.replace("\ufffd\ufffd", " ")
+                tokens = nltk.tokenize.word_tokenize(caption.lower())
+                lens.append(len(tokens))
+                counter.update(tokens)
+
+        print('[%d/%d] Creating vocabulary.' %(i, len(caption_filenames)))
+
+    words = [word for word, cnt in counter.items() if cnt >= threshold]
+
+    for word in words:
+        vocab.add_word(word)
+
+    with open(vocab_path, 'wb') as f:
+        pickle.dump(vocab, f)
+
+    import numpy
+    print('Max Len: ', max(lens))
+    print('Average Len: ', numpy.mean(lens))
+    print('Created vocabulary. Total items are: %d' %(len(vocab)))
+    return vocab
 
 def load_filenames(data_dir):
     filepath = os.path.join(data_dir, 'train', 'filenames.pickle')

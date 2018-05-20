@@ -398,76 +398,185 @@ class TextDataset(data.Dataset):
     def __len__(self):
         return len(self.filenames)
 
-    def collator(self, batch):
-        _use_shared_memory = False
+# For Oxford 102 Flowers dataset
+class FlowersDataset(data.Dataset):
+    def __init__(self, data_dir, split='train', embedding_type='cnn-rnn',
+                 base_size=64, transform=None, target_transform=None):
+        self.transform = transform
+        self.norm = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+        self.target_transform = target_transform
 
-        r"""Puts each data field into a tensor with outer dimension batch size"""
-        error_msg = "batch must contain tensors, numbers, dicts or lists; found {}"
-        elem_type = type(batch[0])
+        self.imsize = []
+        for i in range(cfg.TREE.BRANCH_NUM):
+            self.imsize.append(base_size)
+            base_size = base_size * 2
 
-        print ('elem_type: ', elem_type)
+        self.data = []
+        self.data_dir = data_dir
+        self.bbox = None
 
-        if torch.is_tensor(batch[0]):
-            print('Inside tensor block.')
-            out = None
-            return torch.stack(batch, 0, out=out)
-        elif elem_type.__module__ == 'numpy' and elem_type.__name__ != 'str_' \
-                and elem_type.__name__ != 'string_':
-            print ('Inside Numpy block.')
-            elem = batch[0]
-            if elem_type.__name__ == 'ndarray':
-                print('Inside Numpy block 1.')
-                # array of string classes and object
-                if re.search('[SaUO]', elem.dtype.str) is not None:
-                    raise TypeError(error_msg.format(elem.dtype))
+        split_dir = os.path.join(data_dir, split)
 
-                return torch.stack([torch.from_numpy(b) for b in batch], 0)
-            if elem.shape == ():  # scalars
-                print('Inside Numpy block 2.')
-                py_type = float if elem.dtype.name.startswith('float') else int
-                return numpy_type_map[elem.dtype.name](list(map(py_type, batch)))
-        elif isinstance(batch[0], int_classes):
-            return torch.LongTensor(batch)
-        elif isinstance(batch[0], float):
-            return torch.DoubleTensor(batch)
-        elif isinstance(batch[0], string_classes):
-            print ('Inside string_classes block.')
-            return batch
-        elif isinstance(batch[0], collections.Mapping):
-            print('Inside mapping block.')
+        self.filenames = self.load_filenames(split_dir)
+        self.embeddings = self.load_embedding(split_dir, embedding_type)
+        self.class_id = self.load_class_id(split_dir, len(self.filenames))
+        self.captions = self.load_all_captions()
 
-            return {key: self.collator([d[key] for d in batch]) for key in batch[0]}
-        elif isinstance(batch[0], collections.Sequence):
-            print('Inside Sequence block.')
+        if cfg.TREE.ENSURE_CAPTION_CONSISTENCY:
+            self.vocab = self.load_vocabulary()
 
-            transposed = zip(*batch)
-            return [self.collator(samples) for samples in transposed]
+        if cfg.TRAIN.FLAG:
+            self.iterator = self.prepair_training_pairs
+        else:
+            self.iterator = self.prepair_test_pairs
 
-        raise TypeError((error_msg.format(type(batch[0]))))
+    def load_vocabulary(self):
+        data_dir = self.data_dir
+        filenames = self.filenames
+        vocab_path = os.path.join(data_dir, cfg.VOCAB_FILENAME)
+        if not os.path.exists(vocab_path):
+            vocab = create_FLOWER_vocab(data_dir, filenames, vocab_path, self.class_id)
+        else:
+            with open(vocab_path, 'rb') as f:
+                vocab = pickle.load(f)
+            print ('Loaded vocabulary.')
+        return vocab
 
-        #
-        # imgs, wrong_imgs, embedding, key, caption_tensors, len_vector = zip(*data)
-        #
-        # print('-----------**Inside collator: S**----------')
-        # print([type(d) for d in zip(*data)])
-        # print([len(d) for d in zip(*data)])
-        # print('-----------**Inside collator: E**----------')
-        #
-        # # max_len_across_batch = max([len(cap) for caption_tensor in caption_tensors for cap in caption_tensor])
-        # # c_tensors = []
-        # # len_of_tensors = []
-        # # for caption_tensor in caption_tensors:
-        # #     targets = torch.zeros(len(caption_tensor), max_len_across_batch).long()
-        # #     len_of_captions = [len(cap) for cap in caption_tensor]
-        # #     for i, cap in enumerate(caption_tensor):
-        # #         end = len_of_captions[i]
-        # #         targets[i, :end] = cap[:end]
-        # #     c_tensors.append(targets)
-        # #     len_of_tensors.append(len_of_captions)
-        # #
-        # # # c_tensors = torch.Tensor(c_tensors)
-        # # print ('len: ', len(c_tensors))
-        # # print (c_tensors)
-        # # return imgs, wrong_imgs, torch.from_numpy(embedding[0]), key, c_tensors, len_of_tensors
-        # # # return zip(imgs, wrong_imgs, embedding, key, caption_tensors)
-        # return data
+    def load_all_captions(self):
+        def load_captions(caption_name):  # self,
+            cap_path = caption_name
+            with open(cap_path, "r") as f:
+                captions = f.read().decode('utf8').split('\n')
+            captions = [cap.replace("\ufffd\ufffd", " ")
+                        for cap in captions if len(cap) > 0]
+            return captions
+
+        caption_dict = {}
+
+        for i, key in enumerate(self.filenames):
+            caption_name = '%s/text/class_%05d/%s.txt' % (self.data_dir, self.class_id[i], key.split('/')[1])
+            captions = load_captions(caption_name)
+            caption_dict[key] = captions
+        return caption_dict
+
+    def load_embedding(self, data_dir, embedding_type):
+        if embedding_type == 'cnn-rnn':
+            embedding_filename = '/char-CNN-RNN-embeddings.pickle'
+        elif embedding_type == 'cnn-gru':
+            embedding_filename = '/char-CNN-GRU-embeddings.pickle'
+        elif embedding_type == 'skip-thought':
+            embedding_filename = '/skip-thought-embeddings.pickle'
+
+        with open(data_dir + embedding_filename, 'rb') as f:
+            embeddings = pickle.load(f)
+            embeddings = np.array(embeddings)
+            # embedding_shape = [embeddings.shape[-1]]
+            print('embeddings: ', embeddings.shape)
+        return embeddings
+
+    def load_class_id(self, data_dir, total_num):
+        if os.path.isfile(data_dir + '/class_info.pickle'):
+            with open(data_dir + '/class_info.pickle', 'rb') as f:
+                class_id = pickle.load(f)
+        else:
+            class_id = np.arange(total_num)
+        return class_id
+
+    def load_filenames(self, data_dir):
+        filepath = os.path.join(data_dir, 'filenames.pickle')
+        with open(filepath, 'rb') as f:
+            filenames = pickle.load(f)
+        print('Load filenames from: %s (%d)' % (filepath, len(filenames)))
+        return filenames
+
+    def build_caption_tensors(self, captions):
+        vocab = self.vocab
+        caption_tensor = []
+        len_vector = []
+        for caption in captions:
+            tokens = nltk.tokenize.word_tokenize(str(caption).lower())
+            target = list()
+            target.append(vocab('<start>'))
+            target.extend([vocab(word) for word in tokens])
+            target.append(vocab('<end>'))
+            len_vector.append(len(target))
+            target = torch.Tensor(target)
+
+            target_padded = torch.zeros(cfg.TREE.MAX_CAPTION_LEN).long()
+            end = len(target)
+            end = cfg.TREE.MAX_CAPTION_LEN if end > cfg.TREE.MAX_CAPTION_LEN else end
+            # print ('end index: ', end)
+            target_padded[:end] = target[:end]
+
+            caption_tensor.append(target_padded)
+        len_vector = torch.LongTensor(len_vector)
+        return torch.stack(caption_tensor, 0), len_vector
+
+    def prepair_training_pairs(self, index):
+        key = self.filenames[index]
+
+        bbox = None
+        data_dir = self.data_dir
+
+        caption_tensors = None
+        len_vector = None
+        if cfg.TREE.ENSURE_CAPTION_CONSISTENCY:
+            caption_tensors, len_vector = self.build_caption_tensors(self.captions[key])
+
+        # captions = self.captions[key]
+        embeddings = self.embeddings[index, :, :]
+        img_name = '%s/%s.jpg' % (data_dir, key)
+        imgs = get_imgs(img_name, self.imsize,
+                        bbox, self.transform, normalize=self.norm)
+
+        wrong_ix = random.randint(0, len(self.filenames) - 1)
+        if(self.class_id[index] == self.class_id[wrong_ix]):
+            wrong_ix = random.randint(0, len(self.filenames) - 1)
+        wrong_key = self.filenames[wrong_ix]
+        if self.bbox is not None:
+            wrong_bbox = self.bbox[wrong_key]
+        else:
+            wrong_bbox = None
+        wrong_img_name = '%s/%s.jpg' % \
+            (data_dir, wrong_key)
+        wrong_imgs = get_imgs(wrong_img_name, self.imsize,
+                              wrong_bbox, self.transform, normalize=self.norm)
+
+        if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == False:
+            embedding_ix = random.randint(0, embeddings.shape[0] - 1)
+            embedding = embeddings[embedding_ix, :]
+            if self.target_transform is not None:
+                embedding = self.target_transform(embedding)
+        else:
+            embedding = embeddings
+            if self.target_transform is not None:
+                for i in range(embeddings.shape[0]):
+                    transformed_embeddings[i] = self.target_transform(embeddings[i, :])
+                embedding = transformed_embeddings
+
+        return imgs, wrong_imgs, embedding, key, caption_tensors, len_vector  # captions
+
+    def prepair_test_pairs(self, index):
+        key = self.filenames[index]
+
+        bbox = None
+        data_dir = self.data_dir
+
+        # captions = self.captions[key]
+        embeddings = self.embeddings[index, :, :]
+        img_name = '%s/%s.jpg' % (data_dir, key)
+        imgs = get_imgs(img_name, self.imsize,
+                        bbox, self.transform, normalize=self.norm)
+
+        if self.target_transform is not None:
+            embeddings = self.target_transform(embeddings)
+
+        return imgs, embeddings, key  # captions
+
+    def __getitem__(self, index):
+        return self.iterator(index)
+
+    def __len__(self):
+        return len(self.filenames)

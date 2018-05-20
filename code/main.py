@@ -61,8 +61,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train a GAN network')
     parser.add_argument('--cfg', dest='cfg_file',
                         help='optional config file',
-                        default='cfg/birds_proGAN.yml', type=str)
-    parser.add_argument('--gpu', dest='gpu_id', type=str, default='-1')
+                        default='cfg/flowers_3stages.yml', type=str)
+    parser.add_argument('--gpu', dest='gpu_id', type=str, default='0,1,2,3,4,5,6')
     parser.add_argument('--data_dir', dest='data_dir', type=str, default='')
     parser.add_argument('--manualSeed', type=int, help='manual seed')
     args = parser.parse_args()
@@ -100,7 +100,7 @@ if __name__ == "__main__":
 
     split_dir, bshuffle = 'train', True
     if not cfg.TRAIN.FLAG:
-        if cfg.DATASET_NAME == 'birds':
+        if cfg.DATASET_NAME == 'birds' or cfg.DATASET_NAME == 'flowers':
             bshuffle = False
             split_dir = 'test'
 
@@ -122,10 +122,16 @@ if __name__ == "__main__":
                               base_size=cfg.TREE.BASE_SIZE,
                               transform=image_transform)
     elif cfg.GAN.B_CONDITION:  # text to image task
-        from datasets import TextDataset
-        dataset = TextDataset(cfg.DATA_DIR, split_dir,
-                              base_size=cfg.TREE.BASE_SIZE,
-                              transform=image_transform)
+        if cfg.DATASET_NAME == 'birds':
+            from datasets import TextDataset
+            dataset = TextDataset(cfg.DATA_DIR, split_dir,
+                                  base_size=cfg.TREE.BASE_SIZE,
+                                  transform=image_transform)
+        elif cfg.DATASET_NAME == 'flowers':
+            from datasets import FlowersDataset
+            dataset = FlowersDataset(cfg.DATA_DIR, split_dir,
+                                  base_size=cfg.TREE.BASE_SIZE,
+                                  transform=image_transform)
     assert dataset
     num_gpu = len(cfg.GPU_ID.split(','))
     dataloader = torch.utils.data.DataLoader(
