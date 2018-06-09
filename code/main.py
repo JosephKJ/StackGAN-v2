@@ -61,8 +61,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train a GAN network')
     parser.add_argument('--cfg', dest='cfg_file',
                         help='optional config file',
-                        default='cfg/flowers_3stages.yml', type=str)
-    parser.add_argument('--gpu', dest='gpu_id', type=str, default='0,1,2,3,4,5,6')
+                        default='cfg/eval_flowers.yml', type=str)
+    parser.add_argument('--gpu', dest='gpu_id', type=str, default='1')
     parser.add_argument('--data_dir', dest='data_dir', type=str, default='')
     parser.add_argument('--manualSeed', type=int, help='manual seed')
     args = parser.parse_args()
@@ -150,6 +150,7 @@ if __name__ == "__main__":
         algo.train()
     else:
         algo.evaluate(split_dir)
+        # algo.evaluate_change_in_noise(split_dir)
     end_t = time.time()
     print('Total time for training:', end_t - start_t)
     ''' Running time comparison for 10epoch with batch_size 24 on birds dataset

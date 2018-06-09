@@ -969,10 +969,10 @@ class condGANTrainer(object):
             vutils.save_image(super_img, savename, nrow=10, normalize=True)
 
     def save_singleimages(self, images, filenames,
-                          save_dir, split_dir, sentenceID, imsize):
+                          save_dir, split_dir, sentenceID, imsize, mean=0):
         for i in range(images.size(0)):
             s_tmp = '%s/single_samples/%s/%s' %\
-                (save_dir, split_dir, filenames[i])
+                (save_dir, split_dir, filenames[i]+'_'+str(mean))
             folder = s_tmp[:s_tmp.rfind('/')]
             if not os.path.isdir(folder):
                 print('Make a new folder: ', folder)
@@ -1064,3 +1064,91 @@ class condGANTrainer(object):
                         #                       save_dir, split_dir, 128)
                         self.save_superimages(fake_img_list, filenames,
                                               save_dir, split_dir, 256)
+
+    def evaluate_change_in_noise(self, split_dir):
+        if cfg.TRAIN.NET_G == '':
+            print('Error: the path for morels is not found!')
+        else:
+            # Build and load the generator
+            if split_dir == 'test':
+                split_dir = 'valid'
+
+            if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+                netG = G_NET_MULTI_CAPTION()
+            else:
+                netG = G_NET()
+
+            netG.apply(weights_init)
+            netG = torch.nn.DataParallel(netG, device_ids=self.gpus)
+            print(netG)
+            # state_dict = torch.load(cfg.TRAIN.NET_G)
+            state_dict = \
+                torch.load(cfg.TRAIN.NET_G,
+                           map_location=lambda storage, loc: storage)
+            netG.load_state_dict(state_dict)
+            print('Load ', cfg.TRAIN.NET_G)
+
+            # the path to save generated images
+            s_tmp = cfg.TRAIN.NET_G
+            istart = s_tmp.rfind('_') + 1
+            iend = s_tmp.rfind('.')
+            iteration = int(s_tmp[istart:iend])
+            s_tmp = s_tmp[:s_tmp.rfind('/')]
+            save_dir = '%s/iteration%d' % (s_tmp, iteration)
+
+            nz = cfg.GAN.Z_DIM
+            noise = Variable(torch.FloatTensor(self.batch_size, nz))
+            if cfg.CUDA:
+                netG.cuda()
+                noise = noise.cuda()
+
+            # switch to evaluate mode
+            netG.eval()
+            for step, data in enumerate(self.data_loader, 0):
+                imgs, t_embeddings, filenames = data
+                if cfg.CUDA:
+                    t_embeddings = Variable(t_embeddings).cuda()
+                else:
+                    t_embeddings = Variable(t_embeddings)
+                # print(t_embeddings[:, 0, :], t_embeddings.size(1))
+
+                embedding_dim = t_embeddings.size(1)
+                batch_size = imgs[0].size(0)
+                noise.data.resize_(batch_size, nz)
+
+                for mean in np.arange(-2, 2, 0.5):
+                    noise.data.normal_(mean, 1)
+
+                    if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+                        fake_imgs, _, _, _ = netG(noise, t_embeddings)
+                        self.save_singleimages(fake_imgs[-1], filenames,
+                                               save_dir, split_dir, 3, 256, mean)
+                        # self.save_singleimages(fake_imgs[-2], filenames,
+                        #                        save_dir, split_dir, 2, 256)
+                        # self.save_singleimages(fake_imgs[-3], filenames,
+                        #                        save_dir, split_dir, 1, 256)
+                # if step==5:
+                #     break
+                # else:
+                #     fake_img_list = []
+                #     for i in range(embedding_dim):
+                #         fake_imgs, _, _, _ = netG(noise, t_embeddings[:, i, :])
+                #         if cfg.TEST.B_EXAMPLE:
+                #             # fake_img_list.append(fake_imgs[0].data.cpu())
+                #             # fake_img_list.append(fake_imgs[1].data.cpu())
+                #             fake_img_list.append(fake_imgs[2].data.cpu())
+                #         else:
+                #             self.save_singleimages(fake_imgs[-1], filenames,
+                #                                    save_dir, split_dir, i, 256)
+                #             # self.save_singleimages(fake_imgs[-2], filenames,
+                #             #                        save_dir, split_dir, i, 128)
+                #             # self.save_singleimages(fake_imgs[-3], filenames,
+                #             #                        save_dir, split_dir, i, 64)
+                #         # break
+                #     if cfg.TEST.B_EXAMPLE:
+                #         # self.save_superimages(fake_img_list, filenames,
+                #         #                       save_dir, split_dir, 64)
+                #         # self.save_superimages(fake_img_list, filenames,
+                #         #                       save_dir, split_dir, 128)
+                #         self.save_superimages(fake_img_list, filenames,
+                #                               save_dir, split_dir, 256)
