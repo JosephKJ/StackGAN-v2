@@ -150,8 +150,6 @@ class INIT_STAGE_G(nn.Module):
             nn.Linear(in_dim, ngf * 4 * 4 * 2, bias=False),
             nn.BatchNorm1d(ngf * 4 * 4 * 2),
             GLU())
-
-
         self.upsample1 = upBlock(ngf, ngf // 2)
         self.upsample2 = upBlock(ngf // 2, ngf // 4)
         self.upsample3 = upBlock(ngf // 4, ngf // 8)
@@ -720,13 +718,15 @@ class CCN_NET(nn.Module):
         context = torch.sum(features * alpha.unsqueeze(2), 1)
         return context, alpha
 
-    def forward(self, features, captions, lengths):
+    def forward(self, features, captions, lengths, isTestRun=False):
         """
         :param features: batch_size * 196 * 512
         :param captions: batch_size * time_steps
         :param lengths:
         :return:
         """
+        if isTestRun:
+            return self.sample(features)
 
         batch_size, time_step = captions.data.shape
         vocab_size = self.vocab_size
@@ -763,7 +763,8 @@ class CCN_NET(nn.Module):
 
         return predicts
 
-    def sample(self, feature, max_len=20):
+
+    def sample(self, feature, max_len=50):
         # greedy sample
         embed = self.embed
         lstm_cell = self.lstm_cell

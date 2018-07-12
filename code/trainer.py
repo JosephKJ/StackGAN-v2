@@ -10,19 +10,25 @@ import torchvision.utils as vutils
 import numpy as np
 import os
 import time
+import sys
+
 from PIL import Image, ImageFont, ImageDraw
 from torch.nn.utils.rnn import pack_padded_sequence
 from copy import deepcopy
 
 from miscc.config import cfg
 from miscc.utils import mkdir_p
+from miscc.caption_helper import decode_captions
 
 from tensorboard import summary
 from tensorboard import FileWriter
 
 from model import G_NET, G_NET_MULTI_CAPTION, D_NET64, D_NET128, D_NET256, D_NET512, D_NET1024, INCEPTION_V3, CCN_NET
 
-
+if sys.version_info[0] == 2:
+    import cPickle as pickle
+else:
+    import pickle
 
 # ################## Shared functions ###################
 def compute_mean_covariance(img):
@@ -805,6 +811,7 @@ class condGANTrainer(object):
     def train(self):
         self.netG, self.netsD, self.num_Ds,\
             self.inception_model, start_count, self.ccNets = load_network(self.gpus)
+
         avg_param_G = copy_G_params(self.netG)
 
         self.optimizerG, self.optimizersD, self.optimizersCCN = \
@@ -873,6 +880,7 @@ class condGANTrainer(object):
                 # (3) Update G network: maximize log(D(G(z)))
                 ######################################################
                 kl_loss, errG_total = self.train_Gnet(count)
+
                 for p, avg_p in zip(self.netG.parameters(), avg_param_G):
                     avg_p.mul_(0.999).add_(0.001, p.data)
 
@@ -1152,3 +1160,94 @@ class condGANTrainer(object):
                 #         #                       save_dir, split_dir, 128)
                 #         self.save_superimages(fake_img_list, filenames,
                 #                               save_dir, split_dir, 256)
+
+
+    def evaluate_and_generate_captions(self, split_dir):
+        if cfg.TRAIN.NET_G == '':
+            print('Error: the path for models is not found!')
+        else:
+            # Build and load the generator
+            if split_dir == 'test':
+                split_dir = 'valid'
+
+            if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+                netG = G_NET_MULTI_CAPTION()
+                cccNet = CCN_NET(vis_dim=16)
+            else:
+                netG = G_NET()
+
+            # Load Generator Network
+            netG.apply(weights_init)
+            netG = torch.nn.DataParallel(netG, device_ids=self.gpus)
+            print(netG)
+            # state_dict = torch.load(cfg.TRAIN.NET_G)
+            state_dict = \
+                torch.load(cfg.TRAIN.NET_G,
+                           map_location=lambda storage, loc: storage)
+            netG.load_state_dict(state_dict)
+            print('Load Generator', cfg.TRAIN.NET_G)
+
+            # Load CCCN
+            cccNet.apply(weights_init)
+            cccNet = torch.nn.DataParallel(cccNet, device_ids=self.gpus)
+            print(cccNet)
+            state_dict = torch.load(cfg.TRAIN.NET_CCN, map_location=lambda storage, loc: storage)
+            cccNet.load_state_dict(state_dict)
+            print('Load CCCN', cfg.TRAIN.NET_CCN)
+
+            # the path to save generated images
+            s_tmp = cfg.TRAIN.NET_G
+            istart = s_tmp.rfind('_') + 1
+            iend = s_tmp.rfind('.')
+            iteration = int(s_tmp[istart:iend])
+            s_tmp = s_tmp[:s_tmp.rfind('/')]
+            save_dir = '%s/iteration%d' % (s_tmp, iteration)
+
+            nz = cfg.GAN.Z_DIM
+            noise = Variable(torch.FloatTensor(self.batch_size, nz))
+            if cfg.CUDA:
+                netG.cuda()
+                cccNet.cuda()
+                noise = noise.cuda()
+
+            # switch to evaluate mode
+            netG.eval()
+            cccNet.eval()
+
+            for step, data in enumerate(self.data_loader, 0):
+                imgs, t_embeddings, filenames = data
+                if cfg.CUDA:
+                    t_embeddings = Variable(t_embeddings).cuda()
+                else:
+                    t_embeddings = Variable(t_embeddings)
+                # print(t_embeddings[:, 0, :], t_embeddings.size(1))
+
+                embedding_dim = t_embeddings.size(1)
+                batch_size = imgs[0].size(0)
+                noise.data.resize_(batch_size, nz)
+                noise.data.normal_(0, 1)
+
+                if cfg.TREE.MULTIPLE_TEXT_CONDITIONING == True:
+                    fake_imgs, _, _, pre_d_activations = netG(noise, t_embeddings)
+                    self.save_singleimages(fake_imgs[-1], filenames, save_dir, split_dir, 1, 256)
+
+                    # Generate Caption
+                    pre_d_activation = pre_d_activations[-1].cuda()
+                    pre_d_activation = pre_d_activation.view(pre_d_activation.size(0), 16, 16*16).transpose(1, 2)
+                    sampled_ids, alphas = cccNet(pre_d_activation, None, None, isTestRun=True)
+
+                    # Load Vocab
+                    vocab_path = os.path.join(cfg.DATA_DIR, cfg.VOCAB_FILENAME)
+                    with open(vocab_path, 'rb') as f:
+                        vocab = pickle.load(f)
+                    print('Loaded vocabulary.')
+
+                    # Get the caption
+                    for i, caption_vec in enumerate(sampled_ids):
+                        cap = decode_captions(caption_vec.data.cpu().view(1, -1), vocab.idx2word)[0]
+                        print(filenames[i])
+                        print(cap)
+                        print('\n\n')
+                    break
+
+            print('Done!')
