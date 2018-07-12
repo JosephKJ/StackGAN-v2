@@ -5,3 +5,5 @@ We propose a generative model that will iteratively improve the concepts, and th
 We report quantitative and qualitative results to bring out the efficacy of the proposed approach in zero-shot image generations, where
 images are generated from descriptions of novel classes that are not seen during training.
 
+### Architecture
+
