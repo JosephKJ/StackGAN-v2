@@ -7,3 +7,11 @@ images are generated from descriptions of novel classes that are not seen during
 
 ### Architecture
 
+![alt text](https://raw.githubusercontent.com/JosephKJ/DistillGAN/master/images/Architecture.png)
+
+### Results
+
+![alt text](https://raw.githubusercontent.com/JosephKJ/DistillGAN/master/images/results.jpg)
+
+
+
